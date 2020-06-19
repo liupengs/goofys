@@ -180,6 +180,7 @@ func (dh *DirHandle) listObjectsSlurp(prefix string) (resp *ListBlobsOutput, err
 		}
 	}
 
+	// carefully: list objects without delimiter
 	params := &ListBlobsInput{
 		Prefix:     &reqPrefix,
 		StartAfter: marker,
@@ -253,17 +254,18 @@ func (dh *DirHandle) listObjectsSlurp(prefix string) (resp *ListBlobsOutput, err
 }
 
 func (dh *DirHandle) listObjects(prefix string) (resp *ListBlobsOutput, err error) {
-	errSlurpChan := make(chan error, 1)
-	slurpChan := make(chan ListBlobsOutput, 1)
+	//errSlurpChan := make(chan error, 1)
+	//slurpChan := make(chan ListBlobsOutput, 1)
 	errListChan := make(chan error, 1)
 	listChan := make(chan ListBlobsOutput, 1)
 
-	fs := dh.inode.fs
+	//fs := dh.inode.fs
 
 	// try to list without delimiter to see if we can slurp up
 	// multiple directories
-	parent := dh.inode.Parent
+	//parent := dh.inode.Parent
 
+	/*
 	if dh.Marker == nil &&
 		fs.flags.TypeCacheTTL != 0 &&
 		(parent != nil && parent.dir.seqOpenDirScore >= 2) {
@@ -280,12 +282,14 @@ func (dh *DirHandle) listObjects(prefix string) (resp *ListBlobsOutput, err erro
 	} else {
 		errSlurpChan <- fuse.EINVAL
 	}
+	*/
 
 	listObjectsFlat := func() {
 		params := &ListBlobsInput{
 			Delimiter:         aws.String("/"),
 			ContinuationToken: dh.Marker,
 			Prefix:            &prefix,
+			MaxKeys:           PUInt32(262144),
 		}
 
 		cloud, _ := dh.inode.cloud()
@@ -298,6 +302,7 @@ func (dh *DirHandle) listObjects(prefix string) (resp *ListBlobsOutput, err erro
 		}
 	}
 
+	/*
 	if !fs.flags.Cheap {
 		// invoke the fallback in parallel if desired
 		go listObjectsFlat()
@@ -313,6 +318,10 @@ func (dh *DirHandle) listObjects(prefix string) (resp *ListBlobsOutput, err erro
 	if fs.flags.Cheap {
 		listObjectsFlat()
 	}
+	*/
+
+	// try list objects from bucket namespace
+	listObjectsFlat()
 
 	// if we got an error (which may mean slurp is not applicable,
 	// wait for regular list
@@ -374,11 +383,19 @@ func (dh *DirHandle) ReadDir(offset fuseops.DirOffset) (en *DirHandleEntry, err 
 		fs.mu.Lock()
 
 		// this is only returned for non-slurped responses
+
 		for _, dir := range resp.Prefixes {
 			// strip trailing /
-			dirName := (*dir.Prefix)[0 : len(*dir.Prefix)-1]
+			dirName := *dir.Prefix
+			if strings.HasSuffix(dirName, "/") {
+				dirName = dirName[0 : len(dirName)-1]
+			}
+
 			// strip previous prefix
-			dirName = dirName[len(prefix):]
+			if strings.HasPrefix(dirName, prefix) {
+				dirName = dirName[len(prefix):]
+			}
+
 			if len(dirName) == 0 {
 				continue
 			}
@@ -399,12 +416,17 @@ func (dh *DirHandle) ReadDir(offset fuseops.DirOffset) (en *DirHandleEntry, err 
 		}
 
 		for _, obj := range resp.Items {
+			/*
 			if !strings.HasPrefix(*obj.Key, prefix) {
 				// other slurped objects that we cached
 				continue
 			}
+			*/
 
-			baseName := (*obj.Key)[len(prefix):]
+			baseName := *obj.Key
+			if strings.HasPrefix(baseName, prefix) {
+				baseName = baseName[len(prefix):]
+			}
 
 			slash := strings.Index(baseName, "/")
 			if slash == -1 {
@@ -731,6 +753,7 @@ func (parent *Inode) insertChildUnlocked(inode *Inode) {
 			panic(fmt.Sprintf("double insert of %v", parent.getChildName(*inode.Name)))
 		}
 
+		// 有序插入， 但是看着很耗费时间
 		parent.dir.Children = append(parent.dir.Children, nil)
 		copy(parent.dir.Children[i+1:], parent.dir.Children[i:])
 		parent.dir.Children[i] = inode
@@ -738,9 +761,10 @@ func (parent *Inode) insertChildUnlocked(inode *Inode) {
 }
 
 func (parent *Inode) LookUp(name string) (inode *Inode, err error) {
-	parent.logFuse("Inode.LookUp", name)
+	parent.logFuse("Inode.LookUp 1 ", name)
 
 	inode, err = parent.LookUpInodeMaybeDir(name, parent.getChildName(name))
+	parent.logFuse("Inode.LookUp 2 ", name)
 	if err != nil {
 		return nil, err
 	}
@@ -876,6 +900,7 @@ func (parent *Inode) isEmptyDir(fs *Goofys, name string) (isDir bool, err error)
 		return
 	}
 
+	//TODO: need delete?
 	if len(resp.Items) == 1 {
 		isDir = true
 
@@ -1173,20 +1198,45 @@ func (parent *Inode) readDirFromCache(offset fuseops.DirOffset) (en *DirHandleEn
 	return
 }
 
+// 向 s3 发送 head 请求
 func (parent *Inode) LookUpInodeNotDir(name string, c chan HeadBlobOutput, errc chan error) {
+	s3Log.Debugf("LookUpInodeNotDir %s start ", name)
 	cloud, key := parent.cloud()
 	key = appendChildName(key, name)
 	params := &HeadBlobInput{Key: key}
 	resp, err := cloud.HeadBlob(params)
+
 	if err != nil {
+		s3Log.Debugf("LookUpInodeNotDir %s err = %v", name, err)
 		errc <- mapAwsError(err)
 		return
 	}
 
 	s3Log.Debug(resp)
 	c <- *resp
+	s3Log.Debugf("LookUpInodeNotDir %s end ", name)
 }
 
+// head head object, sync
+func (parent *Inode) LookUpInodeNotDirSync(name string) (*HeadBlobOutput, error) {
+	s3Log.Debugf("LookUpInodeNotDirSync %s start ", name)
+	cloud, key := parent.cloud()
+	key = appendChildName(key, name)
+	params := &HeadBlobInput{Key: key}
+	resp, err := cloud.HeadBlob(params)
+
+	if err != nil {
+		s3Log.Debugf("LookUpInodeNotDir %s err = %v", name, err)
+		return nil, err
+	}
+
+	s3Log.Debug(resp)
+	s3Log.Debugf("LookUpInodeNotDirSync %s end ", name)
+	return resp, nil
+}
+
+
+// list name, 用于判断 name 是文件还是目录
 func (parent *Inode) LookUpInodeDir(name string, c chan ListBlobsOutput, errc chan error) {
 	cloud, key := parent.cloud()
 	key = appendChildName(key, name) + "/"
@@ -1208,7 +1258,10 @@ func (parent *Inode) LookUpInodeDir(name string, c chan ListBlobsOutput, errc ch
 }
 
 // returned inode has nil Id
+// 通过 head object, head object/ list object/ 来判断 name 是文件还是目录， 还是不存在
 func (parent *Inode) LookUpInodeMaybeDir(name string, fullName string) (inode *Inode, err error) {
+
+	s3Log.Debugf("LookUpInodeMaybeDir object %s start", name)
 	errObjectChan := make(chan error, 1)
 	objectChan := make(chan HeadBlobOutput, 2)
 	errDirBlobChan := make(chan error, 1)
@@ -1223,12 +1276,46 @@ func (parent *Inode) LookUpInodeMaybeDir(name string, fullName string) (inode *I
 		panic("s3 disabled")
 	}
 
+	s3Log.Debugf("LookUpInodeMaybeDir object %s 1", name)
+	resp, err := parent.LookUpInodeNotDirSync(name)
+	if err == nil {
+		s3Log.Debugf("success head object %s err = %v", name, err)
+		inode = NewInode(parent.fs, parent, &name)
+		if !resp.IsDirBlob {
+			// XXX/TODO if both object and object/ exists, return dir
+			inode.Attributes = InodeAttributes{
+				Size:  resp.Size,
+				Mtime: *resp.LastModified,
+			}
+
+			// don't want to point to the attribute because that
+			// can get updated
+			size := inode.Attributes.Size
+			inode.KnownSize = &size
+		} else {
+			inode.ToDir()
+			if resp.LastModified != nil {
+				inode.Attributes.Mtime = *resp.LastModified
+			}
+		}
+		inode.fillXattrFromHead(resp)
+		return
+	}
+	s3Log.Debugf("LookUpInodeMaybeDir object %s 2", name)
+
+	// 下面的代码最多可能异步执3个函数
+	// 根据 --cheap 和 --no-implicit-dir 来控制异步执行的函数数
+	// 异步 head 此 object
 	go parent.LookUpInodeNotDir(name, objectChan, errObjectChan)
+	// s3 don't support DirBlob
 	if !cloud.Capabilities().DirBlob && !parent.fs.flags.Cheap {
+		// 异步 head object/
 		go parent.LookUpInodeNotDir(name+"/", objectChan, errDirBlobChan)
+		// ExplicitDir Assume all directory objects ("dir/") exist (default: off)
 		if !parent.fs.flags.ExplicitDir {
 			errDirChan = make(chan error, 1)
 			dirChan = make(chan ListBlobsOutput, 1)
+			// list object
 			go parent.LookUpInodeDir(name, dirChan, errDirChan)
 		}
 	}
@@ -1264,6 +1351,7 @@ func (parent *Inode) LookUpInodeMaybeDir(name string, fullName string) (inode *I
 			s3Log.Debugf("HEAD %v = %v", fullName, err)
 		case resp := <-dirChan:
 			err = nil
+			// 当存在 name 为前缀的文件
 			if len(resp.Prefixes) != 0 || len(resp.Items) != 0 {
 				inode = NewInode(parent.fs, parent, &name)
 				inode.ToDir()

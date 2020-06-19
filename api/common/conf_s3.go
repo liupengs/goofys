@@ -18,7 +18,6 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"fmt"
-	"net/http"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/client"
@@ -37,6 +36,7 @@ type S3Config struct {
 	StsEndpoint     string
 
 	RequesterPays bool
+	EndpointsPath string
 	Region        string
 	RegionSet     bool
 
@@ -71,10 +71,8 @@ func (c *S3Config) ToAwsConfig(flags *FlagStorage) (*aws.Config, error) {
 	awsConfig := (&aws.Config{
 		Region: &c.Region,
 		Logger: GetLogger("s3"),
-	}).WithHTTPClient(&http.Client{
-		Transport: &defaultHTTPTransport,
-		Timeout:   flags.HTTPTimeout,
 	})
+
 	if flags.DebugS3 {
 		awsConfig.LogLevel = aws.LogLevel(aws.LogDebug | aws.LogDebugWithRequestErrors)
 	}
@@ -86,6 +84,11 @@ func (c *S3Config) ToAwsConfig(flags *FlagStorage) (*aws.Config, error) {
 	}
 	if flags.Endpoint != "" {
 		awsConfig.Endpoint = &flags.Endpoint
+	}
+
+	if flags.EndpointsPath != "" {
+		fmt.Println("EndpointsPath=", flags.EndpointsPath)
+		awsConfig.EndpointsPath = &flags.EndpointsPath
 	}
 
 	awsConfig.S3ForcePathStyle = aws.Bool(!c.Subdomain)

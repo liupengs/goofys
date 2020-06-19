@@ -270,6 +270,7 @@ func (inode *Inode) isDir() bool {
 }
 
 // LOCKS_REQUIRED(inode.mu)
+// 记录 meta 信息
 func (inode *Inode) fillXattrFromHead(resp *HeadBlobOutput) {
 	inode.userMetadata = make(map[string][]byte)
 
@@ -294,6 +295,7 @@ func (inode *Inode) fillXattrFromHead(resp *HeadBlobOutput) {
 
 // LOCKS_REQUIRED(inode.mu)
 func (inode *Inode) fillXattr() (err error) {
+	inode.logFuse("fillXattr start")
 	if !inode.ImplicitDir && inode.userMetadata == nil {
 
 		fullName := *inode.FullName()
@@ -318,12 +320,16 @@ func (inode *Inode) fillXattr() (err error) {
 		}
 	}
 
+	inode.logFuse("fillXattr end")
+
 	return
 }
 
 // LOCKS_REQUIRED(inode.mu)
 func (inode *Inode) getXattrMap(name string, userOnly bool) (
 	meta map[string][]byte, newName string, err error) {
+
+	inode.logFuse("getXattrMap start %s", name)
 
 	if strings.HasPrefix(name, "s3.") {
 		if userOnly {
@@ -348,6 +354,7 @@ func (inode *Inode) getXattrMap(name string, userOnly bool) (
 		}
 	}
 
+	inode.logFuse("getXattrMap end %s", name)
 	if meta == nil {
 		return nil, "", syscall.ENODATA
 	}

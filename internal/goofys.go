@@ -590,12 +590,14 @@ func (fs *Goofys) LookUpInode(
 	parent.mu.Lock()
 	inode = parent.findChildUnlocked(op.Name)
 	if inode != nil {
+		fuseLog.Debugf("LookUpInode get child %v %v", op.Parent, op.Name)
 		ok = true
 		inode.Ref()
 
 		if expired(inode.AttrTime, fs.flags.StatCacheTTL) {
 			ok = false
 			if inode.fileHandles != 0 {
+				fuseLog.Debugf("LookUpInode get child %v %v 1", op.Parent, op.Name)
 				// we have an open file handle, object
 				// in S3 may not represent the true
 				// state of the file anyway, so just
@@ -607,20 +609,25 @@ func (fs *Goofys) LookUpInode(
 			}
 		}
 	} else {
+		fuseLog.Debugf("LookUpInode get child %v %v 2", op.Parent, op.Name)
 		ok = false
 	}
 	parent.mu.Unlock()
 
+	fuseLog.Debugf("LookUpInode get child %v %v 3", op.Parent, op.Name)
 	if !ok {
 		var newInode *Inode
 
 		newInode, err = parent.LookUp(op.Name)
 		if err == fuse.ENOENT && inode != nil && inode.isDir() {
+			fuseLog.Debugf("LookUpInode get child %v %v 3.1", op.Parent, op.Name)
 			// we may not be able to look up an implicit
 			// dir if all the children are removed, so we
 			// just pretend this dir is still around
 			err = nil
 		} else if err != nil {
+			fuseLog.Debugf("LookUpInode get child %v %v 3.2", op.Parent, op.Name)
+			// 没在后端查询到名字为 name 的 object 或者 dir
 			if inode != nil {
 				// just kidding! pretend we didn't up the ref
 				fs.mu.Lock()
@@ -636,11 +643,13 @@ func (fs *Goofys) LookUpInode(
 		}
 
 		if inode == nil {
+			fuseLog.Debugf("LookUpInode get child %v %v 3.3", op.Parent, op.Name)
 			parent.mu.Lock()
 			// check again if it's there, could have been
 			// added by another lookup or readdir
 			inode = parent.findChildUnlocked(op.Name)
 			if inode == nil {
+				fuseLog.Debugf("LookUpInode get child %v %v 3.4", op.Parent, op.Name)
 				fs.mu.Lock()
 				inode = newInode
 				fs.insertInode(parent, inode)
@@ -648,6 +657,7 @@ func (fs *Goofys) LookUpInode(
 			}
 			parent.mu.Unlock()
 		} else {
+			fuseLog.Debugf("LookUpInode get child %v %v 3.5", op.Parent, op.Name)
 			if newInode != nil {
 				if newInode.Attributes.Mtime.IsZero() {
 					newInode.Attributes.Mtime = inode.Attributes.Mtime
@@ -657,6 +667,7 @@ func (fs *Goofys) LookUpInode(
 			inode.AttrTime = time.Now()
 		}
 	}
+	fuseLog.Debugf("LookUpInode get child %v %v 4", op.Parent, op.Name)
 
 	op.Entry.Child = inode.Id
 	op.Entry.Attributes = inode.InflateAttributes()
@@ -783,17 +794,20 @@ func (fs *Goofys) ReadDir(
 	}
 
 	inode := dh.inode
-	inode.logFuse("ReadDir", op.Offset)
+	inode.logFuse("****ReadDir 1 ", op.Offset)
 
 	dh.mu.Lock()
 	defer dh.mu.Unlock()
 
 	for i := op.Offset; ; i++ {
+		inode.logFuse("ReadDir 3 ")
 		e, err := dh.ReadDir(i)
 		if err != nil {
+			inode.logFuse("ReadDir 4 ")
 			return err
 		}
 		if e == nil {
+			inode.logFuse("ReadDir 5 ")
 			break
 		}
 
@@ -803,14 +817,17 @@ func (fs *Goofys) ReadDir(
 
 		n := fuseutil.WriteDirent(op.Dst[op.BytesRead:], makeDirEntry(e))
 		if n == 0 {
+			inode.logFuse("ReadDir 6 ")
 			break
 		}
 
 		dh.inode.logFuse("<-- ReadDir", e.Name, e.Offset)
 
 		op.BytesRead += n
+		inode.logFuse("ReadDir 7 ")
 	}
 
+	inode.logFuse("****ReadDir 8\n\n")
 	return
 }
 
