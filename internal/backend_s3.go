@@ -36,6 +36,12 @@ import (
 	"github.com/jacobsa/fuse"
 )
 
+const (
+	S3_DIR_CONTENT_TYP = "type/dir"
+	S3_NAMESPACE_DIR = "dir"
+	S3_NAMESPACE_META_NAME = "Namespace"
+)
+
 type S3Backend struct {
 	*s3.S3
 	cap Capabilities
@@ -116,6 +122,9 @@ func (s *S3Backend) setV2Signer(handlers *request.Handlers) {
 }
 
 func (s *S3Backend) newS3() {
+	if s.awsConfig.EndpointsPath != nil {
+		fmt.Println("newS3", *s.awsConfig.EndpointsPath)
+	}
 	s.S3 = s3.New(s.config.Session, s.awsConfig)
 	if s.config.RequesterPays {
 		s.S3.Handlers.Build.PushBack(addRequestPayer)
@@ -365,6 +374,18 @@ func (s *S3Backend) HeadBlob(param *HeadBlobInput) (*HeadBlobOutput, error) {
 	if err != nil {
 		return nil, mapAwsError(err)
 	}
+
+
+	// check whether this object is directory
+	isDir := false
+	namespace, ok := resp.Metadata[S3_NAMESPACE_META_NAME]
+	if ok && resp.ContentType != nil && *resp.ContentType == S3_DIR_CONTENT_TYP &&
+			*namespace == S3_NAMESPACE_DIR {
+		isDir = true
+	} else {
+		isDir = strings.HasSuffix(param.Key, "/")
+	}
+
 	return &HeadBlobOutput{
 		BlobItemOutput: BlobItemOutput{
 			Key:          &param.Key,
@@ -375,7 +396,7 @@ func (s *S3Backend) HeadBlob(param *HeadBlobInput) (*HeadBlobOutput, error) {
 		},
 		ContentType: resp.ContentType,
 		Metadata:    metadataToLower(resp.Metadata),
-		IsDirBlob:   strings.HasSuffix(param.Key, "/"),
+		IsDirBlob:   isDir,
 		RequestId:   s.getRequestId(req),
 	}, nil
 }

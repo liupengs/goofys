@@ -150,6 +150,13 @@ func NewApp() (app *cli.App) {
 			},
 
 			cli.StringFlag{
+				Name:  "endpoints-path",
+				Value: "",
+				Usage: "The load balance AWS endpoints path." +
+					" Possible values: ~/endpoints",
+			},
+
+			cli.StringFlag{
 				Name:  "region",
 				Value: s3Default.Region,
 				Usage: "The region to connect to. Usually this is auto-detected." +
@@ -237,6 +244,7 @@ func NewApp() (app *cli.App) {
 				Usage: "How long to cache name -> file/dir mappings in directory " +
 					"inodes.",
 			},
+
 			cli.DurationFlag{
 				Name:  "http-timeout",
 				Value: 30 * time.Second,
@@ -335,6 +343,7 @@ func PopulateFlags(c *cli.Context) (ret *FlagStorage) {
 
 		// Common Backend Config
 		Endpoint:       c.String("endpoint"),
+		EndpointsPath:  c.String("endpoints-path"),
 		UseContentType: c.Bool("use-content-type"),
 
 		// Debugging,

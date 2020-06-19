@@ -10,6 +10,10 @@ import (
 	"os/exec"
 	"time"
 
+	"net/http"
+	_ "net/http/pprof"
+
+
 	"github.com/jacobsa/fuse"
 	"github.com/jacobsa/fuse/fuseutil"
 	"github.com/sirupsen/logrus"
@@ -21,6 +25,10 @@ func Mount(
 	ctx context.Context,
 	bucketName string,
 	flags *FlagStorage) (fs *Goofys, mfs *fuse.MountedFileSystem, err error) {
+
+	go func() {
+		http.ListenAndServe("0.0.0.0:8800", nil)
+	}()
 
 	if flags.DebugS3 {
 		SetCloudLogLevel(logrus.DebugLevel)
