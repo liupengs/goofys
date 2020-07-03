@@ -992,6 +992,7 @@ func appendChildName(parent, child string) string {
 	return parent + child
 }
 
+/*
 func (parent *Inode) isEmptyDir(fs *Goofys, name string) (isDir bool, err error) {
 	cloud, key := parent.cloud()
 	key = appendChildName(key, name) + "/"
@@ -1018,6 +1019,42 @@ func (parent *Inode) isEmptyDir(fs *Goofys, name string) (isDir bool, err error)
 		if *resp.Items[0].Key != key {
 			err = fuse.ENOTEMPTY
 		}
+	}
+
+	return
+}
+*/
+
+func (parent *Inode) isEmptyDir(fs *Goofys, name string) (isDir bool, err error) {
+	cloud, key := parent.cloud()
+	key = appendChildName(key, name)
+
+	headParams := &HeadBlobInput{Key: key}
+	if resp, err := cloud.HeadBlob(headParams); err != nil {
+		return false, mapAwsError(err)
+	} else if !resp.IsDirBlob {
+		// not dir
+		return false, nil
+	}
+
+	key = key + "/"
+	isDir = true
+
+	params := &ListBlobsInput{
+		Delimiter: aws.String("/"),
+		MaxKeys:   PUInt32(2),
+		Prefix:    &key,
+	}
+
+	resp, err := cloud.ListBlobs(params)
+	if err != nil {
+		return false, mapAwsError(err)
+	}
+
+	if len(resp.Prefixes) > 0 || len(resp.Items) > 0 {
+		err = fuse.ENOTEMPTY
+		isDir = true
+		return
 	}
 
 	return
