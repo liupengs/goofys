@@ -1451,6 +1451,9 @@ func (parent *Inode) LookUpInodeMaybeDir(name string, fullName string) (inode *I
 		}
 		inode.fillXattrFromHead(resp)
 		return
+	} else if err == fuse.ENOENT {
+		s3Log.Debugf("failed head object %s err = %v", name, err)
+		return
 	}
 	s3Log.Debugf("LookUpInodeMaybeDir object %s 2", name)
 
