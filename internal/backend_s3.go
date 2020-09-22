@@ -18,6 +18,8 @@ import (
 	. "github.com/kahing/goofys/api/common"
 
 	"fmt"
+	"bytes"
+	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -34,6 +36,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 
 	"github.com/jacobsa/fuse"
+
+    "github.com/data-o/aggregation-cache/bcache"
 )
 
 const (
@@ -55,6 +59,9 @@ type S3Backend struct {
 	aws      bool
 	gcs      bool
 	v2Signer bool
+
+    dlt *bcache.DLT
+
 }
 
 func NewS3(bucket string, flags *FlagStorage, config *S3Config) (*S3Backend, error) {
@@ -86,6 +93,20 @@ func NewS3(bucket string, flags *FlagStorage, config *S3Config) (*S3Backend, err
 	}
 
 	s.newS3()
+
+    datasetName := "imagenet1k"
+	maxCacheSize := (uint64(150) << 30)
+
+	dm := bcache.NewDatasetManager()
+	dlt, err := dm.Start(datasetName, 1, maxCacheSize)
+	if err != nil {
+		fmt.Println("error in main", err)
+	} else {
+		dlt.Dump()
+	}
+
+    s.dlt = dlt
+
 	return s, nil
 }
 
@@ -733,6 +754,39 @@ func (s *S3Backend) CopyBlob(param *CopyBlobInput) (*CopyBlobOutput, error) {
 }
 
 func (s *S3Backend) GetBlob(param *GetBlobInput) (*GetBlobOutput, error) {
+
+    for true {
+		node, code, err := s.dlt.Get(param.Key)
+		if code == bcache.CODE_AGAIN {
+			fmt.Println("read", param.Key, " again")
+			continue
+		} else if code == bcache.CODE_NOT_FOUND {
+			fmt.Println("Failed read", param.Key, " not found")
+			break
+		} else if err != nil {
+			return nil, err
+		} else if node == nil {
+			return nil, fmt.Errorf("Get empty cache node")
+		}
+
+		if param.Start != 0 || param.Count != 0 {
+			return nil, fmt.Errorf("don't support range read")
+		}
+
+		return &GetBlobOutput{
+			HeadBlobOutput: HeadBlobOutput{
+				BlobItemOutput: BlobItemOutput{
+					Key:          &param.Key,
+					ETag:         nil,
+					LastModified: PTime(time.Now()),
+					Size:         uint64(node.FileSize),
+				},
+			},
+			Body:      ioutil.NopCloser(bytes.NewReader(*node.Body)),
+		}, nil
+	}
+
+	// when fail get file from data-o
 	get := s3.GetObjectInput{
 		Bucket: &s.bucket,
 		Key:    &param.Key,
